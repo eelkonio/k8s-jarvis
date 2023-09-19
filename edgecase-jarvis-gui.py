@@ -32,7 +32,7 @@ model_path, config_path, model_item = model_manager.download_model("tts_models/e
 voc_path, voc_config_path, _ = model_manager.download_model(model_item["default_vocoder"])
 
 audio_file = "recorded_audio.wav"
-max_wait=10
+max_wait=3
 
 tts_syn = Synthesizer(
     tts_checkpoint=model_path,
@@ -122,16 +122,26 @@ def gui_print(text,color):
     if event == sg.WINDOW_CLOSED or event == 'Exit':
         close_program()
 
-
+last_jokes=""
 def tell_one_joke():
+    global last_jokes
     # start telling a joke
     rnd=random.randint(0,10)
     if rnd<2:
-      chatGPT("Tell me a new cloud-computing joke. Make it very uncommon but funny.", random.random())
+      joke=chatGPT("Tell me a new cloud-computing joke. Make it very uncommon, intelligent and funny. Do not repeat the following jokes: {last_jokes}", random.random())
     elif rnd<4:
-      chatGPT("Tell me a programming joke. Temperature: 0.{tmp_rnd}", random.random())
+      joke=chatGPT("Tell me a new, original programming joke. Make it intelligent and funny. Do not repeat the following jokes: {last_jokes}", random.random())
+    elif rnd<6:
+      joke=chatGPT("Tell me a new, original science joke. Make it intelligent and funny. Do not repeat the following jokes: {last_jokes}", random.random())
     else:
-      chatGPT(f"Combine sharp mom-jokes with kubernetes. Start the joke with 'Yo cluster is so big...'", random.random())
+      joke=chatGPT(f"Combine original, new mom-jokes with kubernetes or cloud computing. Start the joke with 'Yo cluster is so big...'  Do not repeat the following jokes: {last_jokes}",
+              random.random())
+    joke=" ".join(joke.splitlines())
+    last_jokes=f"{last_jokes}\n{joke}"
+    if len(last_jokes)>20000:
+        last_jokes_lines=last_jokes.splitlines()
+        last_jokes="\n".join(last_jokes_lines[len(last_jokes_lines)//2])
+    #print(f"LAST-JOKES: {last_jokes}\n\n")
 
 def tell_some_jokes():
     # start telling a few jokes
@@ -278,6 +288,10 @@ def play_audio(audio_content):
     engine.runAndWait()
 
 
+def saveline(line):
+    with open("savedlines.txt", mode='a') as f:
+        f.write(f"{datetime.now()} -- {line}\n")
+
 
 
 def play_wav(fn):
@@ -314,6 +328,7 @@ def play_wav(fn):
 
 
 def speak(answer):
+    saveline(answer)
     if USE_GOOGLE_VOICE:
         gui_print(answer,'blue')
         audio_content = synthesize_text(answer)
@@ -355,6 +370,7 @@ def chatGPT(transcript, temperature):
     if os.path.isfile(audio_file):
       os.remove(audio_file)
 
+    return answer
 
 # Main program
 
@@ -380,8 +396,9 @@ while not stop_command:
     #gui_print("Transcribing speech...", 'black')
     transcript, words = leopard.process_file(os.path.abspath(audio_file))
     gui_print(f"You: '{transcript}'", 'black')
+    saveline(transcript)
+
     transcript=transcript.lower()
-    
     if 'voice' in transcript and 'switch' in transcript:
         gui_print ("*** SWITCHING VOICE ***", 'black')
         voice_idx+=1
