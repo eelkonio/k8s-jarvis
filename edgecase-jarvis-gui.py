@@ -5,6 +5,7 @@ import os
 from datetime import datetime
 import time
 import struct
+import random
 
 from google.cloud import texttospeech
 import pvleopard as pvleopard
@@ -19,8 +20,35 @@ from openwakeword.model import Model
 import PySimpleGUI as sg
 
 
-voices=["sam","pyttsx3"]
-voice_idx=1  # start with sam!
+#----- TTS
+# import all the modules that we will need to use
+from TTS.utils.manage import ModelManager
+from TTS.utils.synthesizer import Synthesizer
+
+from playsound import playsound
+tts_path = "/home/eelko/projects/k8s-jarvis/lib/python3.10/site-packages/TTS/.models.json"
+model_manager = ModelManager(tts_path)
+model_path, config_path, model_item = model_manager.download_model("tts_models/en/ljspeech/tacotron2-DDC")
+voc_path, voc_config_path, _ = model_manager.download_model(model_item["default_vocoder"])
+
+audio_file = "recorded_audio.wav"
+max_wait=10
+
+tts_syn = Synthesizer(
+    tts_checkpoint=model_path,
+    tts_config_path=config_path,
+    vocoder_checkpoint=voc_path,
+    vocoder_config=voc_config_path
+)
+
+#------
+
+
+
+
+
+voices=["tts","pyttsx3",'sam']
+voice_idx=1  # start with tts
 
 first_run=True
 
@@ -87,12 +115,35 @@ def close_program():
 
 
 
-def gui_print(text):
+def gui_print(text,color):
     global window
-    window['my-chat'].print(text, text_color='black', background_color='white')
+    window['my-chat'].print(text, text_color=f'{color}', background_color='white')
     event, values = window.read(timeout=10)  # Wait for up to 1 second for an event
     if event == sg.WINDOW_CLOSED or event == 'Exit':
         close_program()
+
+
+def tell_one_joke():
+    # start telling a joke
+    rnd=random.randint(0,10)
+    if rnd<2:
+      chatGPT("Tell me a new cloud-computing joke. Make it very uncommon but funny.", random.random())
+    elif rnd<4:
+      chatGPT("Tell me a programming joke. Temperature: 0.{tmp_rnd}", random.random())
+    else:
+      chatGPT(f"Combine sharp mom-jokes with kubernetes. Start the joke with 'Yo cluster is so big...'", random.random())
+
+def tell_some_jokes():
+    # start telling a few jokes
+    speak("This is boring. Let me tell you some jokes.")
+    gui_print("","black")
+    tell_one_joke()
+    gui_print("","black")
+    tell_one_joke()
+    gui_print("","black")
+    tell_one_joke()
+    gui_print("","black")
+    speak("I hope you liked the jokes. I am listening to you again.")
 
 
 
@@ -117,7 +168,6 @@ def wait_for_wakeword():
 
     # Skip clearing the audio buffer only in the first run
     if not first_run:
-        # gui_print ("Clearing audio buffer")
         current_epoch=time.time()
         while int(time.time())<current_epoch+2:
             # Get audio
@@ -128,12 +178,20 @@ def wait_for_wakeword():
         first_run=False
 
     # Generate output string header
-    gui_print(f"Listening to your smegsy voice...")
+    gui_print(f"Listening to your smegsy voice...", 'black')
 
     jarvis_called=False
+    start_time = datetime.now()
     while not jarvis_called:
         now = datetime.now()
         
+        elapsed_delta=(now-start_time)
+        elapsed=elapsed_delta.total_seconds() % max_wait
+
+        if elapsed>(max_wait-0.5):
+            tell_some_jokes()
+            start_time=datetime.now()
+
         # Get audio
         audio = np.frombuffer(mic_stream.read(CHUNK), dtype=np.int16)
 
@@ -146,16 +204,17 @@ def wait_for_wakeword():
 
 
         for mdl in owwModel.prediction_buffer.keys():
+            #print(f"checking keyword {mdl}")
             # Add scores in formatted table
             scores = list(owwModel.prediction_buffer[mdl])
 
             if mdl=="hey_jarvis" and scores[-1] >= 0.5:
-                gui_print (f"keyword {mdl} is noticed in the latest scores.")
+                gui_print (f"keyword {mdl} is noticed in the latest scores.", 'black')
                 jarvis_called=True
             elif scores[-1]>=0.5:
-                gui_print(f"Noticed keyword {mdl}, but ignoring it.")
+                gui_print(f"Noticed keyword {mdl}, but ignoring it.", 'black')
 
-    gui_print ("Jarvis is called.")
+    gui_print ("Jarvis is called.", 'black')
 
 
 
@@ -224,7 +283,7 @@ def play_audio(audio_content):
 def play_wav(fn):
     chunk=1024
     if not os.path.exists(fn):
-        gui_print (f"ERROR: play_wav: no file found name {fn}")
+        gui_print (f"ERROR: play_wav: no file found name {fn}", 'red')
         return
     wf = wave.open(fn, 'rb')
 
@@ -256,26 +315,45 @@ def play_wav(fn):
 
 def speak(answer):
     if USE_GOOGLE_VOICE:
-        gui_print(answer)
+        gui_print(answer,'blue')
         audio_content = synthesize_text(answer)
         play_audio(audio_content)
     else:
         if voices[voice_idx]=="pyttsx3":
             # This pretty line of the code reads openAI response
-            gui_print(answer)
+            gui_print(answer,'blue')
             pyttsx3.speak(answer)
         elif voices[voice_idx]=="sam":
             tmpfile="/tmp/speech.wav"
             for sentence in answer.split("."):
                 sam_sentence=re.sub("[^a-zA-Z0-9 ]","",sentence)
                 if sam_sentence!="":
-                    sam_command=f"sam -wav {tmpfile} {sam_sentence}."
-                    gui_print (sentence)
+                    sam_command=f"/usr/local/bin/sam -wav {tmpfile} {sam_sentence}."
+                    gui_print (sentence,'blue')
                     os.system(sam_command)
                     play_wav(tmpfile)
                     os.remove(tmpfile)
+        elif voices[voice_idx]=='tts':
+            gui_print(answer,'blue')
+            outputs = tts_syn.tts(answer)
+            tts_syn.save_wav(outputs, "/tmp/audio-1.wav")
+            playsound('/tmp/audio-1.wav')
 
 
+def chatGPT(transcript, temperature):
+    response = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "assistant",
+                   "content": ("If applicable, use your Kubernetes and Cloud computing knowledge to formulate a short reply to this question: "+transcript)}],
+        temperature=temperature,
+    )
+
+    answer=response.choices[0].message.content
+    speak(answer)
+
+    # Remove the audio file if you don't need it
+    if os.path.isfile(audio_file):
+      os.remove(audio_file)
 
 
 # Main program
@@ -283,51 +361,43 @@ def speak(answer):
 
 # Saying some fun welcome message with instructions for the user
 welcome="I'm Jarvis. Ask me anything!"
-gui_print (welcome)
+gui_print (welcome, 'blue')
 engine.say(welcome)
 engine.runAndWait()
 
+
 stop_command=False
 while not stop_command:
-    #gui_print("Listening for keywords...")
+    #gui_print("Listening for keywords...", 'black')
     wait_for_wakeword()
 
     # Record speech for a fixed duration
     duration_seconds = 5
-    audio_file = "recorded_audio.wav"
-    #gui_print(f"Recording audio for {duration_seconds} seconds into {audio_file}")
+    #gui_print(f"Recording audio for {duration_seconds} seconds into {audio_file}", 'black')
     record_audio(audio_file, duration_seconds)
 
     # Transcribe the recorded speech using Leopard
-    #gui_print("Transcribing speech...")
+    #gui_print("Transcribing speech...", 'black')
     transcript, words = leopard.process_file(os.path.abspath(audio_file))
-    gui_print(f"You: '{transcript}'")
-
-    if transcript=="Switch voice":
-        gui_print ("*** SWITCHING VOICE ***")
+    gui_print(f"You: '{transcript}'", 'black')
+    transcript=transcript.lower()
+    
+    if 'voice' in transcript and 'switch' in transcript:
+        gui_print ("*** SWITCHING VOICE ***", 'black')
         voice_idx+=1
-        if voice_idx>len(voices):
+        if voice_idx>=len(voices):
             voice_idx=0
         speak(f"I have switched to voice {voices[voice_idx]}.")
         continue
-    elif transcript=="Exit program":
-        gui_print ("*** EXITING PROGRAM ***")
+    elif 'joke' in transcript:
+        tell_one_joke()
+        continue
+    elif 'exit' in transcript:
+        gui_print ("*** EXITING PROGRAM ***", 'black')
         speak(f"I will exit now. Bye, bye.")
         close_program()
     
-    response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
-        messages=[{"role": "assistant",
-                   "content": ("If applicable, use your Kubernetes and Cloud computing knowledge to formulate a short reply to this question: "+transcript)}],
-        temperature=0.6,
-    )
-
-    answer=response.choices[0].message.content
-    speak(answer)
-
-    # Remove the audio file if you don't need it
-    os.remove(audio_file)
-
+    chatGPT(transcript, 0.5)
 
 close_program()
 
